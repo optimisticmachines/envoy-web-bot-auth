@@ -10,7 +10,7 @@ use super::{
     ssrf::DestinationPolicy,
 };
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use web_bot_auth_protocol::{
     DiscoveryMechanism, Ed25519Jwk, MAX_AGENT_URL_BYTES, MAX_KEY_ID_BYTES, ResolveRequest,
@@ -18,6 +18,17 @@ use web_bot_auth_protocol::{
 };
 
 const TEST_KEY_THUMBPRINTS: &[&str] = &["poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U"];
+
+#[derive(Clone, Debug)]
+pub struct Resolution {
+    pub response: ResolveResponse,
+    pub cache_valid_for: Duration,
+}
+
+struct LoadedKeys {
+    keys: Vec<ResourceKeyEntry>,
+    cache_valid_for: Duration,
+}
 
 #[derive(Clone)]
 pub struct ResolverService {
@@ -58,6 +69,15 @@ impl ResolverService {
     }
 
     pub async fn resolve(&self, request: ResolveRequest) -> Result<ResolveResponse, FetchError> {
+        self.resolve_with_metadata(request)
+            .await
+            .map(|resolution| resolution.response)
+    }
+
+    pub async fn resolve_with_metadata(
+        &self,
+        request: ResolveRequest,
+    ) -> Result<Resolution, FetchError> {
         let started = Instant::now();
         let result = self.resolve_timed(request).await;
         self.metrics
@@ -65,7 +85,7 @@ impl ResolverService {
         result
     }
 
-    async fn resolve_timed(&self, request: ResolveRequest) -> Result<ResolveResponse, FetchError> {
+    async fn resolve_timed(&self, request: ResolveRequest) -> Result<Resolution, FetchError> {
         let _handler = self.acquire_handler()?;
         tokio::time::timeout(self.limits.resolution_timeout, self.resolve_inner(request))
             .await
@@ -78,17 +98,20 @@ impl ResolverService {
             .map_err(|_| FetchError::new(FetchErrorKind::Overloaded))
     }
 
-    async fn resolve_inner(&self, request: ResolveRequest) -> Result<ResolveResponse, FetchError> {
+    async fn resolve_inner(&self, request: ResolveRequest) -> Result<Resolution, FetchError> {
         let target = validate_request(&request)?;
         let normalized_identifier = target.normalized_identifier;
         if !self.allow_test_keys && known_test_key(&request.key_id) {
-            return Ok(ResolveResponse::KeyNotFound {
-                normalized_identifier,
+            return Ok(Resolution {
+                response: ResolveResponse::KeyNotFound {
+                    normalized_identifier,
+                },
+                cache_valid_for: Duration::ZERO,
             });
         }
 
-        let keys = self.load_keys(request.discovery, target.fetch_url).await?;
-        Ok(match select_key(&keys, &request.key_id) {
+        let loaded = self.load_keys(request.discovery, target.fetch_url).await?;
+        let response = match select_key(&loaded.keys, &request.key_id) {
             Some(jwk) => ResolveResponse::Resolved {
                 normalized_identifier,
                 jwk: jwk.clone(),
@@ -96,6 +119,10 @@ impl ResolverService {
             None => ResolveResponse::KeyNotFound {
                 normalized_identifier,
             },
+        };
+        Ok(Resolution {
+            response,
+            cache_valid_for: loaded.cache_valid_for,
         })
     }
 
@@ -103,7 +130,7 @@ impl ResolverService {
         &self,
         discovery: DiscoveryMechanism,
         fetch_url: url::Url,
-    ) -> Result<Vec<ResourceKeyEntry>, FetchError> {
+    ) -> Result<LoadedKeys, FetchError> {
         match discovery {
             DiscoveryMechanism::Directory | DiscoveryMechanism::JwksUri => {
                 let representation = self
@@ -114,7 +141,10 @@ impl ResolverService {
                     })
                     .await?;
                 match &representation.resource {
-                    ParsedResource::Jwks(keys) => Ok(keys.clone()),
+                    ParsedResource::Jwks(keys) => Ok(LoadedKeys {
+                        keys: keys.clone(),
+                        cache_valid_for: representation.remaining_freshness(Instant::now()),
+                    }),
                     ParsedResource::Cimd(_) => {
                         Err(FetchError::new(FetchErrorKind::InvalidResource))
                     }
@@ -135,7 +165,10 @@ impl ResolverService {
                     }
                 };
                 if let Some(keys) = cimd.inline_jwks {
-                    return Ok(keys);
+                    return Ok(LoadedKeys {
+                        keys,
+                        cache_valid_for: metadata.remaining_freshness(Instant::now()),
+                    });
                 }
                 let jwks_url = cimd
                     .jwks_uri
@@ -148,7 +181,12 @@ impl ResolverService {
                     })
                     .await?;
                 match &jwks.resource {
-                    ParsedResource::Jwks(keys) => Ok(keys.clone()),
+                    ParsedResource::Jwks(keys) => Ok(LoadedKeys {
+                        keys: keys.clone(),
+                        cache_valid_for: metadata
+                            .remaining_freshness(Instant::now())
+                            .min(jwks.remaining_freshness(Instant::now())),
+                    }),
                     ParsedResource::Cimd(_) => {
                         Err(FetchError::new(FetchErrorKind::InvalidResource))
                     }

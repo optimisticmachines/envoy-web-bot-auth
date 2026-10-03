@@ -10,6 +10,8 @@ pub const MAX_AGENT_URL_BYTES: usize = 2_048;
 pub const MAX_KEY_ID_BYTES: usize = 512;
 pub const MAX_RESOLVE_BODY_BYTES: usize = 8 * 1_024;
 pub const DIRECTORY_PATH: &str = "/.well-known/http-message-signatures-directory";
+/// Resolver response header carrying conservative remaining cache freshness.
+pub const CACHE_VALID_FOR_HEADER: &str = "x-web-bot-auth-cache-valid-for-ms";
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub enum ResolverApiVersion {

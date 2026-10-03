@@ -1,5 +1,6 @@
 //! Envoy request state and callback pipeline.
 
+use crate::cache::{ResolutionCache, ResolutionCacheKey, cache_valid_for};
 use crate::candidate::VerificationCandidate;
 use crate::config::Settings;
 use crate::policy::{
@@ -19,21 +20,27 @@ use web_bot_auth_protocol::{
 
 pub(crate) struct WebBotAuthFilter {
     settings: Arc<Settings>,
+    cache: Option<Arc<ResolutionCache>>,
     pending: Option<PendingVerification>,
     outcome_counter: Option<EnvoyCounterVecId>,
+    cache_counter: Option<EnvoyCounterVecId>,
     duration_histogram: Option<EnvoyHistogramVecId>,
 }
 
 impl WebBotAuthFilter {
     pub(crate) fn new(
         settings: Arc<Settings>,
+        cache: Option<Arc<ResolutionCache>>,
         outcome_counter: Option<EnvoyCounterVecId>,
+        cache_counter: Option<EnvoyCounterVecId>,
         duration_histogram: Option<EnvoyHistogramVecId>,
     ) -> Self {
         Self {
             settings,
+            cache,
             pending: None,
             outcome_counter,
+            cache_counter,
             duration_histogram,
         }
     }
@@ -118,6 +125,7 @@ impl WebBotAuthFilter {
 struct PendingVerification {
     callout_id: u64,
     candidate: VerificationCandidate,
+    cache_key: Option<ResolutionCacheKey>,
     callout_started_at: Instant,
 }
 
@@ -131,6 +139,16 @@ fn record_duration<EHF: EnvoyHttpFilter>(
     if let Some(histogram) = histogram {
         let elapsed_us = u64::try_from(started_at.elapsed().as_micros()).unwrap_or(u64::MAX);
         let _ = envoy_filter.record_histogram_value_vec(histogram, &[phase, result], elapsed_us);
+    }
+}
+
+fn record_cache_event<EHF: EnvoyHttpFilter>(
+    envoy_filter: &mut EHF,
+    counter: Option<EnvoyCounterVecId>,
+    event: &'static str,
+) {
+    if let Some(counter) = counter {
+        let _ = envoy_filter.increment_counter_vec(counter, &[event], 1);
     }
 }
 
@@ -238,6 +256,41 @@ where
                         return self.finish(envoy_filter, error.result());
                     }
                 };
+                let cache_key = self
+                    .cache
+                    .as_ref()
+                    .and_then(|_| ResolutionCacheKey::from_candidate(&candidate));
+                if let (Some(cache), Some(key)) = (&self.cache, &cache_key) {
+                    let lookup_started_at = Instant::now();
+                    if let Some(response) = cache.get(key) {
+                        record_cache_event(envoy_filter, self.cache_counter, "hit");
+                        record_duration(
+                            envoy_filter,
+                            self.duration_histogram,
+                            "resolver_cache_lookup",
+                            "hit",
+                            lookup_started_at,
+                        );
+                        let verify_started_at = Instant::now();
+                        let result = verify_resolver_response(candidate, Ok((*response).clone()));
+                        record_duration(
+                            envoy_filter,
+                            self.duration_histogram,
+                            "response_verify",
+                            result.status(),
+                            verify_started_at,
+                        );
+                        return self.finish(envoy_filter, result);
+                    }
+                    record_cache_event(envoy_filter, self.cache_counter, "miss");
+                    record_duration(
+                        envoy_filter,
+                        self.duration_histogram,
+                        "resolver_cache_lookup",
+                        "miss",
+                        lookup_started_at,
+                    );
+                }
                 let send_setup_started_at = Instant::now();
                 let resolver_request = ResolveRequest {
                     api_version: ResolverApiVersion::V1,
@@ -332,6 +385,7 @@ where
                 self.pending = Some(PendingVerification {
                     callout_id,
                     candidate,
+                    cache_key,
                     callout_started_at,
                 });
                 abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::StopAllIterationAndWatermark
@@ -380,6 +434,16 @@ where
                 .and_then(|body| serde_json::from_slice::<ResolveResponse>(&body).ok())
                 .ok_or(Reason::ResolverResponse)
         };
+        let response_to_cache = if self.cache.is_some() && pending.cache_key.is_some() {
+            match resolver_response.as_ref() {
+                Ok(response @ ResolveResponse::Resolved { .. }) => {
+                    cache_valid_for(response_headers).map(|valid_for| (response.clone(), valid_for))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         record_duration(
             envoy_filter,
@@ -401,6 +465,18 @@ where
             result.status(),
             verify_started_at,
         );
+        if matches!(result, VerificationResult::Verified(_))
+            && let (Some(cache), Some(key)) = (&self.cache, pending.cache_key)
+        {
+            let inserted = response_to_cache.is_some_and(|(response, valid_for)| {
+                cache.insert(key, response, pending.callout_started_at, valid_for)
+            });
+            record_cache_event(
+                envoy_filter,
+                self.cache_counter,
+                if inserted { "insert" } else { "not_cacheable" },
+            );
+        }
         match self.apply_result(envoy_filter, &result) {
             Admission::Allow => envoy_filter.continue_decoding(),
             Admission::Reject { .. } => {}

@@ -29,6 +29,7 @@ pub(super) struct Representation {
     pub(super) policy: CachePolicy,
     stored_at: SystemTime,
     fresh_for: Duration,
+    fresh_until: Instant,
     stale_if_error: Option<Duration>,
 }
 
@@ -37,8 +38,11 @@ impl Representation {
         &self,
         request: &Request<()>,
         now: SystemTime,
+        monotonic_now: Instant,
     ) -> Option<HeaderMap> {
-        if now.duration_since(self.stored_at).unwrap_or(Duration::ZERO) >= MAX_FRESHNESS {
+        if monotonic_now >= self.fresh_until
+            || now.duration_since(self.stored_at).unwrap_or(Duration::ZERO) >= MAX_FRESHNESS
+        {
             return None;
         }
         match self.policy.before_request(request, now) {
@@ -54,6 +58,17 @@ impl Representation {
         now.duration_since(self.stored_at)
             .ok()
             .is_some_and(|age| age <= self.fresh_for.saturating_add(stale_for))
+    }
+
+    /// Returns freshness which another cache may safely reuse.
+    ///
+    /// Stale and non storable representations deliberately return zero. This
+    /// keeps all HTTP cache policy interpretation inside the resolver.
+    pub(super) fn remaining_freshness(&self, now: Instant) -> Duration {
+        if !self.policy.is_storable() {
+            return Duration::ZERO;
+        }
+        self.fresh_until.saturating_duration_since(now)
     }
 }
 
@@ -89,10 +104,11 @@ impl CacheStore {
     ) -> Result<Arc<Representation>, FetchError> {
         let request = cache_request(&key)?;
         let now = SystemTime::now();
+        let monotonic_now = Instant::now();
         let previous = self.representations.get(&key).await;
         if previous
             .as_ref()
-            .and_then(|representation| representation.fresh_request(&request, now))
+            .and_then(|representation| representation.fresh_request(&request, now, monotonic_now))
             .is_some()
         {
             self.metrics.cache_event("fresh_hit");
@@ -160,6 +176,7 @@ pub(super) fn representation_from_response(
     max_keys: usize,
 ) -> Result<Arc<Representation>, FetchError> {
     let now = SystemTime::now();
+    let monotonic_now = Instant::now();
     if response.status == http::StatusCode::NOT_MODIFIED {
         let previous = previous.ok_or_else(|| FetchError::new(FetchErrorKind::InvalidResource))?;
         let response_meta = response_from_fetch(&response)?;
@@ -183,6 +200,7 @@ pub(super) fn representation_from_response(
             policy,
             stored_at: now,
             fresh_for,
+            fresh_until: monotonic_now + fresh_for,
             stale_if_error,
         }));
     }
@@ -206,6 +224,7 @@ pub(super) fn representation_from_response(
         policy,
         stored_at: now,
         fresh_for,
+        fresh_until: monotonic_now + fresh_for,
         stale_if_error,
     }))
 }

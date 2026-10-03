@@ -26,6 +26,7 @@ const AGENT_B_X: &str = "BPGSJ5ZwWg-DHPYthdEJqbGMINULnW91nGkytUXlW4s";
 #[serde(rename_all = "snake_case")]
 pub enum FixtureMode {
     HealthyV1,
+    CacheableV1,
     RotatedV2,
     Malformed,
     Unavailable,
@@ -36,6 +37,7 @@ impl FixtureMode {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::HealthyV1 => "healthy_v1",
+            Self::CacheableV1 => "cacheable_v1",
             Self::RotatedV2 => "rotated_v2",
             Self::Malformed => "malformed",
             Self::Unavailable => "unavailable",
@@ -76,7 +78,10 @@ impl FixtureTransport {
         }
         let body = match mode {
             FixtureMode::Malformed => b"{not-json".to_vec(),
-            FixtureMode::HealthyV1 | FixtureMode::RotatedV2 | FixtureMode::Delayed => {
+            FixtureMode::HealthyV1
+            | FixtureMode::CacheableV1
+            | FixtureMode::RotatedV2
+            | FixtureMode::Delayed => {
                 let x = if request.url.host_str() == Some(FIXTURE_B_HOST) {
                     AGENT_B_X
                 } else {
@@ -124,9 +129,17 @@ impl FixtureTransport {
         };
         let mut headers = HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-        // Every fixture request revalidates so rotation remains observable
-        // without waiting for a cache lifetime to elapse.
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        // The default modes revalidate so rotation remains observable without
+        // waiting for a cache lifetime to elapse. The explicit cacheable mode
+        // exists only for bounded module-cache load measurements.
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(if mode == FixtureMode::CacheableV1 {
+                "max-age=300"
+            } else {
+                "no-cache"
+            }),
+        );
         Ok(FetchResponse {
             status: StatusCode::OK,
             headers,
@@ -200,6 +213,23 @@ mod tests {
 
         fixture.set_mode(FixtureMode::Unavailable).await;
         assert!(FixtureTransport::response(&request(), fixture.mode().await).is_err());
+    }
+
+    #[test]
+    fn cacheable_fixture_mode_is_explicit() {
+        let default_response = FixtureTransport::response(&request(), FixtureMode::HealthyV1)
+            .expect("default fixture response is available");
+        assert_eq!(
+            default_response.headers.get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-cache"))
+        );
+
+        let cacheable_response = FixtureTransport::response(&request(), FixtureMode::CacheableV1)
+            .expect("cacheable fixture response is available");
+        assert_eq!(
+            cacheable_response.headers.get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("max-age=300"))
+        );
     }
 
     #[tokio::test]

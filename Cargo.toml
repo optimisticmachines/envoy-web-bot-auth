@@ -17,7 +17,7 @@ version = "0.2.0"
 edition = "2024"
 rust-version = "1.97.1"
 license = "Apache-2.0"
-repository = "https://github.com/michalskalski/envoy-web-bot-auth"
+repository = "https://github.com/optimisticmachines/envoy-web-bot-auth"
 
 [workspace.dependencies]
 web-bot-auth-protocol = { path = "crates/protocol", version = "0.2.0" }

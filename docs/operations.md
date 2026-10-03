@@ -13,9 +13,9 @@ attestations:
 
 | Artifact | Image | Purpose |
 |---|---|---|
-| Module | `ghcr.io/michalskalski/envoy-web-bot-auth-module` | Image volume containing the dynamic module library |
-| Resolver | `ghcr.io/michalskalski/envoy-web-bot-auth-resolver` | Resolver workload image |
-| Installer | `ghcr.io/michalskalski/envoy-web-bot-auth-module-installer` | Compatibility init container image |
+| Module | `ghcr.io/optimisticmachines/envoy-web-bot-auth-module` | Image volume containing the dynamic module library |
+| Resolver | `ghcr.io/optimisticmachines/envoy-web-bot-auth-resolver` | Resolver workload image |
+| Installer | `ghcr.io/optimisticmachines/envoy-web-bot-auth-module-installer` | Compatibility init container image |
 
 Pin a release digest in the operator managed deployment. The module image is
 not a runnable container.
@@ -52,11 +52,36 @@ Envoy.
 | `mode` | `observe` | `observe`, `optional`, or `required` |
 | `resolver.cluster` | `web-bot-auth-key-resolver` | Envoy cluster for the resolver |
 | `resolver.timeout_ms` | `2000` | Callout timeout, from 1 to 2000 ms |
+| `resolver.cache` | absent | Enable reuse of verified resolver answers |
+| `resolver.cache.max_entries` | `1024` | Cache capacity target, from 1 to 4096 entries |
+| `resolver.cache.max_ttl_ms` | `5000` | Maximum reuse time, from 1 to 60000 ms |
 | `max_signature_lifetime_seconds` | `86400` | Maximum accepted signature lifetime |
 | `clock_skew_seconds` | `5` | Accepted future clock skew |
 | `required_components` | `[]` | Components every signature must cover |
 | `accept_legacy_signature_agent` | `false` | Accept the older `Signature-Agent` item form |
 | `forward_identity_headers` | `true` | Send trusted status, identity, and key ID headers downstream |
+
+For repeated requests using the same discovery resource and key, the module
+cache can avoid resolver callouts while the answer is fresh. Enable it with:
+
+```yaml
+resolver:
+  cluster: web-bot-auth-key-resolver
+  timeout_ms: 2000
+  cache:
+    max_entries: 1024
+    max_ttl_ms: 5000
+```
+
+The cache is disabled when `resolver.cache` is absent. `cache: {}` uses the
+defaults above. Each filter configuration has its own cache, shared across
+Envoy workers.
+
+An answer is stored only after signature verification succeeds. The cache keeps
+it for up to `max_ttl_ms`, but never longer than the resolver allows. Reads do
+not extend that time.
+Every request still verifies its signature. Missing keys, failures, stale
+answers, and resources with `no-cache` or `no-store` are not cached.
 
 By default, verification requires `@authority` or `@target-uri` and the
 matching `Signature-Agent` member. `required_components` accepts only
@@ -131,6 +156,7 @@ the Collector or backend.
 |---|---|---|---|
 | `dynamicmodulescustom.requests` | count | `outcome`, `reason` | Module verification outcomes. Use this instead of HTTP status in observe mode. |
 | `dynamicmodulescustom.web_bot_auth_duration_us` | microseconds | `phase`, `result` | Module phase latency. |
+| `dynamicmodulescustom.resolver_cache_events` | count | `event` | Module cache `hit`, `miss`, `insert`, and `not_cacheable` events. |
 | `web_bot_auth.resolver.resolutions` | `{request}` | `result` | Completed resolver requests. |
 | `web_bot_auth.resolver.resolution.duration` | `s` | `result` | Full admitted resolver request duration. |
 | `web_bot_auth.resolver.cache.events` | `{event}` | `event` | `fresh_hit`, `refresh`, `stale_on_error`, and `error`. |
@@ -141,3 +167,6 @@ Resolver histograms have boundaries from 25 microseconds to 2 seconds. Values
 above 2 seconds are overflow. `resolver_send` measures issuing the Envoy
 callout. `resolver_callout` starts before that step and ends in the response
 callback, so it already includes `resolver_send`. Do not add them.
+`resolver_cache_lookup` measures the module lookup. Cache hits do
+not emit `resolver_send` or `resolver_callout`, but still emit
+`response_verify`.

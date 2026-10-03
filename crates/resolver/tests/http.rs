@@ -11,8 +11,8 @@ use std::{
 use tokio::sync::Notify;
 use tower::ServiceExt;
 use web_bot_auth_protocol::{
-    DiscoveryMechanism, Ed25519Jwk, MAX_RESOLVE_BODY_BYTES, ResolveRequest, ResolveResponse,
-    ResolverApiVersion,
+    CACHE_VALID_FOR_HEADER, DiscoveryMechanism, Ed25519Jwk, MAX_RESOLVE_BODY_BYTES, ResolveRequest,
+    ResolveResponse, ResolverApiVersion,
 };
 use web_bot_auth_resolver::{
     DestinationPolicy, DnsResolver, FetchError, FetchErrorKind, FetchRequest, FetchResponse,
@@ -213,6 +213,15 @@ async fn real_http_router_preserves_query_for_fetch_and_not_identity() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
+    let cache_valid_for = response
+        .headers()
+        .get(CACHE_VALID_FOR_HEADER)
+        .expect("fresh response advertises module cache freshness")
+        .to_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    assert!((1..=300_000).contains(&cache_valid_for));
     let body = axum::body::to_bytes(response.into_body(), 8 * 1024)
         .await
         .unwrap();

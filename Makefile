@@ -12,7 +12,7 @@ RELEASE_DIR ?= $(CURDIR)/dist
 RELEASE_STAGING ?= $(CURDIR)/.release-staging
 RELEASE_VERSION ?= $(shell cargo metadata --no-deps --format-version 1 2>/dev/null | jq -r '.packages[] | select(.name == "envoy-web-bot-auth-module") | .version' | head -n1)
 RELEASE_TAG ?= v$(RELEASE_VERSION)
-RELEASE_REPOSITORY ?= $(or $(GITHUB_REPOSITORY),michalskalski/envoy-web-bot-auth)
+RELEASE_REPOSITORY ?= $(or $(GITHUB_REPOSITORY),optimisticmachines/envoy-web-bot-auth)
 ENVOY_LINE ?= $(shell sed -n 's/^envoy_runtime = "distroless-v\([0-9][0-9]*\.[0-9][0-9]*\).*/envoy\1/p' compatibility.toml)
 EG_VERSION ?= v1.9.1
 EG_NAMESPACE ?= envoy-gateway-system

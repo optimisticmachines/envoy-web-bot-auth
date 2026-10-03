@@ -8,6 +8,10 @@ const DEFAULT_TIMEOUT_MS: u64 = 2_000;
 const MAX_TIMEOUT_MS: u64 = 2_000;
 const DEFAULT_MAX_LIFETIME_SECONDS: u64 = 86_400;
 const DEFAULT_CLOCK_SKEW_SECONDS: u64 = 5;
+const DEFAULT_CACHE_ENTRIES: u64 = 1_024;
+const MAX_CACHE_ENTRIES: u64 = 4_096;
+const DEFAULT_CACHE_TTL_MS: u64 = 5_000;
+const MAX_CACHE_TTL_MS: u64 = 60_000;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -28,6 +32,8 @@ pub(crate) struct ResolverSettings {
     pub(crate) cluster: String,
     #[serde(default = "default_timeout_ms")]
     pub(crate) timeout_ms: u64,
+    #[serde(default)]
+    pub(crate) cache: Option<ResolverCacheSettings>,
 }
 
 impl Default for ResolverSettings {
@@ -35,6 +41,23 @@ impl Default for ResolverSettings {
         Self {
             cluster: default_cluster(),
             timeout_ms: default_timeout_ms(),
+            cache: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ResolverCacheSettings {
+    pub(crate) max_entries: u64,
+    pub(crate) max_ttl_ms: u64,
+}
+
+impl Default for ResolverCacheSettings {
+    fn default() -> Self {
+        Self {
+            max_entries: DEFAULT_CACHE_ENTRIES,
+            max_ttl_ms: DEFAULT_CACHE_TTL_MS,
         }
     }
 }
@@ -71,6 +94,8 @@ pub(crate) enum ConfigError {
     EmptyResolverCluster,
     ZeroResolverTimeout,
     ResolverTimeoutTooLarge,
+    InvalidResolverCacheEntries,
+    InvalidResolverCacheTtl,
     ZeroSignatureLifetime,
     InvalidRequiredComponent(String),
 }
@@ -84,6 +109,14 @@ impl fmt::Display for ConfigError {
             Self::ResolverTimeoutTooLarge => write!(
                 formatter,
                 "resolver.timeout_ms must not exceed {MAX_TIMEOUT_MS} milliseconds"
+            ),
+            Self::InvalidResolverCacheEntries => write!(
+                formatter,
+                "resolver.cache.max_entries must be between 1 and {MAX_CACHE_ENTRIES}"
+            ),
+            Self::InvalidResolverCacheTtl => write!(
+                formatter,
+                "resolver.cache.max_ttl_ms must be between 1 and {MAX_CACHE_TTL_MS}"
             ),
             Self::ZeroSignatureLifetime => {
                 write!(formatter, "max_signature_lifetime_seconds must be positive")
@@ -113,6 +146,14 @@ impl Settings {
         }
         if settings.resolver.timeout_ms > MAX_TIMEOUT_MS {
             return Err(ConfigError::ResolverTimeoutTooLarge);
+        }
+        if let Some(cache) = &settings.resolver.cache {
+            if !(1..=MAX_CACHE_ENTRIES).contains(&cache.max_entries) {
+                return Err(ConfigError::InvalidResolverCacheEntries);
+            }
+            if !(1..=MAX_CACHE_TTL_MS).contains(&cache.max_ttl_ms) {
+                return Err(ConfigError::InvalidResolverCacheTtl);
+            }
         }
         if settings.max_signature_lifetime_seconds == 0 {
             return Err(ConfigError::ZeroSignatureLifetime);
@@ -176,6 +217,25 @@ mod tests {
         assert_eq!(settings.resolver.cluster, "resolver");
         assert_eq!(settings.required_components, ["@method", "@path"]);
         assert!(!settings.forward_identity_headers);
+        assert!(settings.resolver.cache.is_none());
+    }
+
+    #[test]
+    fn cache_is_opt_in_and_bounded() {
+        let settings =
+            Settings::parse(br#"{"resolver":{"cache":{}}}"#).expect("cache defaults should parse");
+        assert_eq!(
+            settings.resolver.cache,
+            Some(ResolverCacheSettings::default())
+        );
+        assert!(matches!(
+            Settings::parse(br#"{"resolver":{"cache":{"max_entries":0}}}"#),
+            Err(ConfigError::InvalidResolverCacheEntries)
+        ));
+        assert!(matches!(
+            Settings::parse(br#"{"resolver":{"cache":{"max_ttl_ms":60001}}}"#),
+            Err(ConfigError::InvalidResolverCacheTtl)
+        ));
     }
 
     #[test]

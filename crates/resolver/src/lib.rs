@@ -20,6 +20,6 @@ pub use fetch::{
 #[cfg(feature = "kind-fixtures")]
 pub use fixture::{FIXTURE_AGENT_URL, FixtureMode, FixtureTransport};
 pub use metrics::{MetricsExporterState, initialize_metrics_exporter};
-pub use service::ResolverService;
+pub use service::{Resolution, ResolverService};
 pub use ssrf::DestinationPolicy;
 pub use web_bot_auth_protocol as protocol;
