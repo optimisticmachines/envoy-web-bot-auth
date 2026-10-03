@@ -556,7 +556,7 @@ dependencies = [
 
 [[package]]
 name = "envoy-web-bot-auth-module"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "envoy-proxy-dynamic-modules-rust-sdk",
  "indexmap",
@@ -2718,7 +2718,7 @@ dependencies = [
 
 [[package]]
 name = "web-bot-auth-protocol"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64",
  "serde",
@@ -2729,7 +2729,7 @@ dependencies = [
 
 [[package]]
 name = "web-bot-auth-resolver"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -2758,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "web-bot-auth-test-harness"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64",
  "clap",
