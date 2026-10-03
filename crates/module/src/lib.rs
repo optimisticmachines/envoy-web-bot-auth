@@ -6,6 +6,7 @@
 // Required by the factory-registration macro in the Envoy SDK.
 #![allow(unpredictable_function_pointer_comparisons)]
 
+mod cache;
 mod candidate;
 mod config;
 mod filter;
@@ -94,17 +95,36 @@ where
             None
         }
     };
+    let cache_counter = match envoy_config.define_counter_vec("resolver_cache_events", &["event"]) {
+        Ok(counter) => Some(counter),
+        Err(error) => {
+            envoy_log_error!(
+                "web-bot-auth metric definition failed name=resolver_cache_events error={error:?}"
+            );
+            None
+        }
+    };
+    let cache = settings
+        .resolver
+        .cache
+        .as_ref()
+        .map(cache::ResolutionCache::new)
+        .map(Arc::new);
 
     Some(Box::new(WebBotAuthConfig {
         settings: Arc::new(settings),
+        cache,
         outcome_counter,
+        cache_counter,
         duration_histogram,
     }))
 }
 
 struct WebBotAuthConfig {
     settings: Arc<Settings>,
+    cache: Option<Arc<cache::ResolutionCache>>,
     outcome_counter: Option<EnvoyCounterVecId>,
+    cache_counter: Option<EnvoyCounterVecId>,
     duration_histogram: Option<EnvoyHistogramVecId>,
 }
 
@@ -115,7 +135,9 @@ where
     fn new_http_filter(&self, _envoy: &mut EHF) -> Box<dyn HttpFilter<EHF>> {
         filter::wrap(filter::WebBotAuthFilter::new(
             Arc::clone(&self.settings),
+            self.cache.clone(),
             self.outcome_counter,
+            self.cache_counter,
             self.duration_histogram,
         ))
     }
@@ -271,7 +293,9 @@ mod tests {
                 mode,
                 ..Settings::default()
             }),
+            None,
             Some(EnvoyCounterVecId(7)),
+            None,
             None,
         );
         assert_eq!(filter.apply_result(&mut envoy, &result), expected_admission);
@@ -621,7 +645,9 @@ mod tests {
                 forward_identity_headers: false,
                 ..Settings::default()
             }),
+            None,
             Some(EnvoyCounterVecId(7)),
+            None,
             None,
         );
         assert_eq!(

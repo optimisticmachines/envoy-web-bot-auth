@@ -136,6 +136,7 @@ struct FixtureControlArgs {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum FixtureModeArg {
     HealthyV1,
+    CacheableV1,
     RotatedV2,
     Malformed,
     Unavailable,
@@ -147,6 +148,7 @@ impl From<FixtureModeArg> for FixtureMode {
     fn from(value: FixtureModeArg) -> Self {
         match value {
             FixtureModeArg::HealthyV1 => Self::HealthyV1,
+            FixtureModeArg::CacheableV1 => Self::CacheableV1,
             FixtureModeArg::RotatedV2 => Self::RotatedV2,
             FixtureModeArg::Malformed => Self::Malformed,
             FixtureModeArg::Unavailable => Self::Unavailable,
@@ -402,8 +404,8 @@ async fn resolve_fixture(
     Json(request): Json<ResolveRequest>,
 ) -> impl IntoResponse {
     let resolver = state.resolver.read().await.clone();
-    match resolver.resolve(request).await {
-        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+    match resolver.resolve_with_metadata(request).await {
+        Ok(resolution) => web_bot_auth_resolver::server::resolution_response(resolution),
         Err(error) if error.kind == FetchErrorKind::BadRequest => {
             (StatusCode::BAD_REQUEST, "invalid resolver request\n").into_response()
         }

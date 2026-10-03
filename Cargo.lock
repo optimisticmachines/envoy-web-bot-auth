@@ -560,6 +560,7 @@ version = "0.2.0"
 dependencies = [
  "envoy-proxy-dynamic-modules-rust-sdk",
  "indexmap",
+ "moka",
  "serde",
  "serde_json",
  "sfv",

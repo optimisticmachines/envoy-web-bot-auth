@@ -524,7 +524,11 @@ mod tests {
                 );
                 headers.insert(
                     http::header::CACHE_CONTROL,
-                    http::HeaderValue::from_static("max-age=3600"),
+                    http::HeaderValue::from_static(if call == 0 {
+                        "max-age=60"
+                    } else {
+                        "max-age=1"
+                    }),
                 );
                 let body = if call == 0 && request.kind == ResourceKind::Cimd {
                     br#"{"client_id":"https://agent.example/metadata","jwks_uri":"https://keys.example/jwks"}"#.to_vec()
@@ -551,7 +555,9 @@ mod tests {
         let mut request = request("missing".into());
         request.discovery = DiscoveryMechanism::Cimd;
         request.agent_url = "https://agent.example/metadata".into();
-        service.resolve(request).await.unwrap();
+        let resolution = service.resolve_with_metadata(request).await.unwrap();
+        assert!(resolution.cache_valid_for > Duration::ZERO);
+        assert!(resolution.cache_valid_for <= Duration::from_secs(1));
         assert_eq!(http.0.load(Ordering::SeqCst), 2);
     }
 
@@ -573,7 +579,11 @@ mod tests {
             true,
         )
         .unwrap();
-        service.resolve(request("missing".into())).await.unwrap();
+        let first = service
+            .resolve_with_metadata(request("missing".into()))
+            .await
+            .unwrap();
+        assert_eq!(first.cache_valid_for, Duration::ZERO);
         service.resolve(request("missing".into())).await.unwrap();
         assert_eq!(http.calls.load(Ordering::SeqCst), 2);
     }
@@ -645,9 +655,17 @@ mod tests {
             true,
         )
         .unwrap();
-        service.resolve(request("missing".into())).await.unwrap();
+        let first = service
+            .resolve_with_metadata(request("missing".into()))
+            .await
+            .unwrap();
+        assert_eq!(first.cache_valid_for, Duration::ZERO);
         tokio::time::sleep(Duration::from_millis(60)).await;
-        service.resolve(request("missing".into())).await.unwrap();
+        let revalidated = service
+            .resolve_with_metadata(request("missing".into()))
+            .await
+            .unwrap();
+        assert!(revalidated.cache_valid_for > Duration::from_secs(59));
         service.resolve(request("missing".into())).await.unwrap();
         assert_eq!(http.calls.load(Ordering::SeqCst), 2);
         assert_eq!(
@@ -709,10 +727,12 @@ mod tests {
         let key_id = "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U".to_owned();
         service.resolve(request(key_id.clone())).await.unwrap();
         tokio::time::sleep(Duration::from_millis(60)).await;
-        assert!(matches!(
-            service.resolve(request(key_id)).await.unwrap(),
-            ResolveResponse::Resolved { .. }
-        ));
+        let stale = service
+            .resolve_with_metadata(request(key_id))
+            .await
+            .unwrap();
+        assert!(matches!(stale.response, ResolveResponse::Resolved { .. }));
+        assert_eq!(stale.cache_valid_for, Duration::ZERO);
     }
 
     #[tokio::test]

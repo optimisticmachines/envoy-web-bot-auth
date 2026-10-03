@@ -83,11 +83,17 @@ impl Metrics {
 }
 
 pub(crate) fn resolution_result(
-    result: &Result<web_bot_auth_protocol::ResolveResponse, crate::FetchError>,
+    result: &Result<crate::service::Resolution, crate::FetchError>,
 ) -> &'static str {
     match result {
-        Ok(web_bot_auth_protocol::ResolveResponse::Resolved { .. }) => "resolved",
-        Ok(web_bot_auth_protocol::ResolveResponse::KeyNotFound { .. }) => "key_not_found",
+        Ok(crate::service::Resolution {
+            response: web_bot_auth_protocol::ResolveResponse::Resolved { .. },
+            ..
+        }) => "resolved",
+        Ok(crate::service::Resolution {
+            response: web_bot_auth_protocol::ResolveResponse::KeyNotFound { .. },
+            ..
+        }) => "key_not_found",
         Err(error) => error.kind.as_str(),
     }
 }

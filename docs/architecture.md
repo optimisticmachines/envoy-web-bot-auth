@@ -52,26 +52,29 @@ revision.
 ## Request flow
 
 Envoy removes caller supplied assertion headers, parses the Web Bot Auth fields,
-and sends one resolve request to the local resolver. The resolver returns either
-a normalized identifier with an Ed25519 JWK or authoritative key absence. The
-module recomputes the identifier and thumbprint and verifies the signature before
-emitting trusted headers.
+and sends a resolve request to the local resolver unless the optional module
+cache has a fresh answer.
+The resolver returns either a normalized identifier with an Ed25519 JWK or
+authoritative key absence. The module recomputes the identifier and thumbprint
+and verifies the signature before emitting trusted headers.
 
 ```text
 Client request
   |  Signature-Agent, Signature-Input, Signature
   v
 Envoy + Web Bot Auth module
-  |  remove identity headers supplied by the caller and parse signed fields
-  v  resolver callout (Unix socket or TCP)
-Resolver
-  |  cache, then bounded HTTPS discovery when needed
-  v
-Public key discovery endpoint
-  |  Ed25519 JWK or authoritative key absence
+  |  remove caller identity headers and parse signed fields
+  |  look up answer in optional module cache
+  +-- fresh cached answer ---------------------------------------+
+  |                                                              |
+  v  miss or disabled                                            |
+Resolver callout (Unix socket or TCP)                            |
+  |  resource cache, then bounded HTTPS discovery when needed    |
+  |  Ed25519 JWK and identity, or authoritative key absence      |
+  +--------------------------------------------------------------+
   v
 Envoy module
-  |  recompute identifier and thumbprint and verify signature
+  |  check identity and key thumbprint and verify this signature
   +-- verified --------------------> upstream request + trusted identity metadata
   `-- absent, invalid, unavailable -> admission-mode policy result
 ```
@@ -113,6 +116,22 @@ These controls are local to each resolver process and pod.
 | Cache, refresh, limiter, circuit entries | 1,024 each |
 | Resolution deadline | 1,800 ms |
 | Envoy callout timeout | 2,000 ms |
+
+### Optional module cache
+
+The module cache stores selected public keys and identities by discovery
+mechanism, fetch URL, and key ID. It is separate from the resolver resource
+cache. Requests using the same filter configuration share it across workers.
+
+The resolver reports how long an answer can be reused in
+`x-web-bot-auth-cache-valid-for-ms`. If discovery uses multiple documents, the
+answer expires when any of them expires. The module can shorten this time but
+cannot extend it. Only positive answers that verify the current request are
+stored. Cache hits use the same verification, trusted outputs, and admission
+policy as resolver responses.
+
+The cache is disabled unless `resolver.cache` is present. It does not combine
+concurrent misses, refresh entries in the background, or serve expired entries.
 
 ## Egress
 
