@@ -2,7 +2,7 @@
 
 This project is experimental and has not received a security audit. Please
 report suspected vulnerabilities privately through [GitHub Security
-Advisories](https://github.com/michalskalski/envoy-web-bot-auth/security/advisories/new).
+Advisories](https://github.com/optimisticmachines/envoy-web-bot-auth/security/advisories/new).
 
 Do not put undisclosed vulnerabilities, exploit details, credentials, or
 personal data in a public issue. Public issues are appropriate after a fix is

@@ -13,9 +13,9 @@ attestations:
 
 | Artifact | Image | Purpose |
 |---|---|---|
-| Module | `ghcr.io/michalskalski/envoy-web-bot-auth-module` | Image volume containing the dynamic module library |
-| Resolver | `ghcr.io/michalskalski/envoy-web-bot-auth-resolver` | Resolver workload image |
-| Installer | `ghcr.io/michalskalski/envoy-web-bot-auth-module-installer` | Compatibility init container image |
+| Module | `ghcr.io/optimisticmachines/envoy-web-bot-auth-module` | Image volume containing the dynamic module library |
+| Resolver | `ghcr.io/optimisticmachines/envoy-web-bot-auth-resolver` | Resolver workload image |
+| Installer | `ghcr.io/optimisticmachines/envoy-web-bot-auth-module-installer` | Compatibility init container image |
 
 Pin a release digest in the operator managed deployment. The module image is
 not a runnable container.
